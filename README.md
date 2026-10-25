@@ -17,6 +17,34 @@
 
 ---
 
+## Quickstart
+
+### Installation
+
+```bash
+./install.sh
+```
+
+Or via make:
+```bash
+make install
+```
+
+### Verification & Tests
+
+```bash
+make test
+```
+
+### Uninstallation
+
+```bash
+./uninstall.sh
+```
+*(Pass `--purge` to delete state configuration files as well)*
+
+---
+
 ## Documentation
 
 - **[Engineering Proposal](docs/proposals/2026-10-25_agy-auto-review-proposal.md)**: Full architecture, state machine, sequence diagrams, and open-source specifications.

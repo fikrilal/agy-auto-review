@@ -246,5 +246,5 @@ agy-auto-review/
 - [x] Loops up to 10 cycles upon `CHANGES_REQUIRED` until `APPROVED`.
 - [x] Never re-reviews clean approvals or self-generated `review-latest.md` files.
 - [x] Gracefully rotates CLI accounts when Gemini quota is exhausted via `agy-auth`.
-- [ ] Standalone test suite passes cleanly (`pytest tests/`).
-- [ ] One-command `install.sh` enables the hook and installs `agy-review` binary cleanly on fresh machines.
+- [x] Standalone test suite passes cleanly (`make test`, 22 unit tests).
+- [x] One-command `install.sh` and `uninstall.sh` handle installation, registration, and clean teardown.
