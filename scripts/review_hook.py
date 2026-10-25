@@ -16,11 +16,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auto_review_core import (
     clip_text,
     capture_workspace,
+    get_project_state,
     load_state,
     run_reviewer_turn,
     save_review_report,
     save_state,
     send_desktop_notification,
+    turn_has_code_modifications,
     MAX_FINDINGS_CHARS,
 )
 
@@ -68,12 +70,6 @@ def main() -> None:
     if not state.get("enabled", False) or mode == "off":
         allow_stop()
 
-    # If the previous model turn just announced the approval, stop immediately!
-    if state.get("announcedApproval"):
-        state["announcedApproval"] = False
-        save_state(state)
-        allow_stop()
-
     # 4. Resolve workspace directory
     workspace_paths = payload.get("workspacePaths", [])
     cwd = workspace_paths[0] if (workspace_paths and os.path.isdir(workspace_paths[0])) else os.getcwd()
@@ -93,6 +89,20 @@ def main() -> None:
     except Exception:
         allow_stop()
 
+    proj_state = get_project_state(state, repo_root)
+
+    # If the previous model turn just announced the approval, stop immediately!
+    if proj_state.get("announcedApproval") or state.get("announcedApproval"):
+        proj_state["announcedApproval"] = False
+        state["announcedApproval"] = False
+        save_state(state)
+        allow_stop()
+
+    # 4b. Guard: if the turn was purely conversational / read-only (zero file modifications), do not review
+    transcript_path = payload.get("transcriptPath")
+    if not turn_has_code_modifications(transcript_path):
+        allow_stop()
+
     # 5. Capture workspace snapshot and dirty check
     try:
         snapshot = capture_workspace(repo_root)
@@ -105,19 +115,20 @@ def main() -> None:
     current_fp = snapshot["fingerprint"]
 
     # Check if this exact working tree was already approved
-    if state.get("approvedFingerprint") == current_fp:
+    if proj_state.get("approvedFingerprint") == current_fp or state.get("approvedFingerprint") == current_fp:
         allow_stop()
 
     # Check if last verdict was APPROVED and the code has not changed since
-    if state.get("lastVerdict") == "APPROVED" and state.get("lastReviewedFingerprint") == current_fp:
+    last_verdict = proj_state.get("lastVerdict") or state.get("lastVerdict")
+    last_fp = proj_state.get("lastReviewedFingerprint") or state.get("lastReviewedFingerprint")
+    if last_verdict == "APPROVED" and last_fp == current_fp:
         allow_stop()
 
-    last_fp = state.get("lastReviewedFingerprint")
     if current_fp == last_fp:
         # Code did not change since last review feedback; avoid infinite loop
         allow_stop()
 
-    review_count = state.get("reviewCount", 0)
+    review_count = proj_state.get("reviewCount", 0)
     max_reviews = state.get("maxReviews")
     if isinstance(max_reviews, int) and review_count >= max_reviews:
         state["mode"] = "off"
@@ -127,7 +138,7 @@ def main() -> None:
 
     model = state.get("model", "gemini-3.8-flash")
     effort = state.get("effort", "high")
-    existing_convo_id = state.get("conversationId")
+    existing_convo_id = proj_state.get("conversationId")
     artifact_dir = payload.get("artifactDirectoryPath")
 
     # 6. Run reviewer turn
@@ -154,12 +165,16 @@ def main() -> None:
     # 7. Evaluate verdict
     if result["ok"]:
         review_count += 1
+        proj_state["reviewCount"] = review_count
+        proj_state["lastReviewedFingerprint"] = current_fp
         state["reviewCount"] = review_count
         state["lastReviewedFingerprint"] = current_fp
         if result.get("conversationId"):
+            proj_state["conversationId"] = result["conversationId"]
             state["conversationId"] = result["conversationId"]
 
         verdict = result.get("verdict")
+        proj_state["lastVerdict"] = verdict
         state["lastVerdict"] = verdict
 
         # Always save the full reviewer findings/report to disk
@@ -175,6 +190,8 @@ def main() -> None:
         )
 
         if verdict == "APPROVED":
+            proj_state["approvedFingerprint"] = current_fp
+            proj_state["announcedApproval"] = True
             state["approvedFingerprint"] = current_fp
             state["announcedApproval"] = True  # Instructs next Stop hook to immediately terminate
             if mode == "once":

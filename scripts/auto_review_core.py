@@ -106,6 +106,81 @@ def find_review_skills(repo_root: str) -> List[str]:
     return review_skills if review_skills else deduped
 
 
+READONLY_TOOLS = {
+    "read_file",
+    "search_web",
+    "read_resource",
+    "list_resources",
+    "ask_question",
+    "manage_task",
+    "schedule",
+    "send_message",
+}
+
+
+def turn_has_code_modifications(transcript_path: Optional[str]) -> bool:
+    """
+    Inspects the transcript for the turn that just finished.
+    Returns False if the turn was purely conversational or only used read-only tools.
+    Returns True if any code-modifying tools (edit_file, write_file, run_command, etc.) were used.
+    """
+    if not transcript_path or not os.path.isfile(transcript_path):
+        return True
+
+    try:
+        with open(transcript_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        has_any_tools = False
+        has_modifying_tools = False
+
+        # Read backwards to find the start of the current turn (last USER_INPUT)
+        for line in reversed(lines):
+            try:
+                step = json.loads(line)
+            except Exception:
+                continue
+
+            # Found the user prompt that initiated this turn
+            if step.get("type") == "USER_INPUT":
+                break
+
+            tool_calls = step.get("tool_calls") or []
+            for tc in tool_calls:
+                has_any_tools = True
+                name = tc.get("name", "")
+                if name not in READONLY_TOOLS:
+                    has_modifying_tools = True
+                    break
+
+            if has_modifying_tools:
+                break
+
+        # If the turn had zero tool calls (pure text Q&A / discussion response)
+        if not has_any_tools:
+            return False
+
+        return has_modifying_tools
+    except Exception:
+        return True
+
+
+def get_project_state(state: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
+    """Returns isolated state for a specific repository root."""
+    projects = state.setdefault("projects", {})
+    if repo_root not in projects:
+        # Fall back to root-level keys if migrating from older single-repo state
+        projects[repo_root] = {
+            "reviewCount": state.get("reviewCount", 0),
+            "conversationId": state.get("conversationId"),
+            "lastReviewedFingerprint": state.get("lastReviewedFingerprint"),
+            "approvedFingerprint": state.get("approvedFingerprint"),
+            "lastVerdict": state.get("lastVerdict"),
+            "announcedApproval": state.get("announcedApproval", False),
+        }
+    return projects[repo_root]
+
+
 def capture_workspace(repo_root: str) -> Dict[str, Any]:
     """Captures git working tree snapshot and fingerprint."""
     # 1. Check custom fingerprint script
