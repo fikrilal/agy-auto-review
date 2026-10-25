@@ -14,9 +14,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from auto_review_core import (
     capture_workspace,
+    check_for_update,
     find_review_skills,
     get_active_account_info,
+    get_installed_version,
     load_state,
+    perform_update,
     rotate_cli_account,
     run_reviewer_turn,
     save_state,
@@ -73,8 +76,15 @@ def print_status(cwd: str) -> None:
             report_file = candidate_report
 
     active_acct = get_active_account_info()
+    version = get_installed_version()
+    up_avail, _, remote_ver = check_for_update(force=False)
+    if up_avail and remote_ver:
+        ver_display = f"{version[:7] if len(version) >= 7 else version} (UPDATE AVAILABLE: {remote_ver[:7]} — run 'agy-review update')"
+    else:
+        ver_display = version[:7] if len(version) >= 7 else version
 
     print("• Antigravity Auto-Review Status:")
+    print(f"  - Version:         {ver_display}")
     print(f"  - Mode:            {mode} ({'ENABLED' if enabled else 'DISABLED'})")
     print(f"  - Cycles:          {cycles}")
     if active_acct:
@@ -214,6 +224,33 @@ def main() -> None:
         else:
             print(f"⚠ Could not rotate account: {msg}")
 
+    elif cmd == "update":
+        force = ("--force" in args) or ("-f" in args)
+        check_only = ("--check" in args) or ("-c" in args)
+        print("Checking for updates from GitHub...")
+        up_avail, local_v, remote_v = check_for_update(force=True)
+        local_disp = local_v[:7] if len(local_v) >= 7 else local_v
+        remote_disp = remote_v[:7] if (remote_v and len(remote_v) >= 7) else (remote_v or "unknown")
+
+        if check_only:
+            if up_avail and remote_v:
+                print(f"💡 Update available: {local_disp} -> {remote_disp}. Run 'agy-review update' to install.")
+            else:
+                print(f"agy-auto-review is up to date ({local_disp}).")
+            return
+
+        if not up_avail and not force:
+            print(f"agy-auto-review is already up to date ({local_disp}). Pass --force to reinstall.")
+            return
+
+        print(f"Updating agy-auto-review to {remote_disp}...")
+        ok, msg = perform_update()
+        if ok:
+            print(f"✓ {msg}")
+        else:
+            print(f"✗ Update failed: {msg}")
+            sys.exit(1)
+
     elif cmd == "status":
         print_status(cwd)
 
@@ -231,6 +268,7 @@ def main() -> None:
         print("  now               Run Antigravity reviewer immediately on current workspace")
         print("  reset             Reset review conversation history and cycle count")
         print("  rotate            Rotate to next available Antigravity account with quota")
+        print("  update [--force]  Update agy-auto-review to latest version from GitHub")
         print("  help              Show this help message")
 
     else:

@@ -16,6 +16,9 @@ import sys
 from typing import Any, Dict, List, Optional, Tuple
 
 STATE_FILE = os.path.expanduser("~/.gemini/config/auto-review.json")
+PLUGINS_DIR = os.path.expanduser("~/.gemini/config/plugins/auto-review")
+VERSION_FILE = os.path.join(PLUGINS_DIR, ".version")
+GITHUB_REPO = "fikrilal/agy-auto-review"
 DEFAULT_MODEL = "gemini-3.8-flash"
 DEFAULT_EFFORT = "high"
 DEFAULT_MAX_REVIEWS = 10
@@ -615,3 +618,98 @@ def run_reviewer_turn(
             "conversationId": None,
             "error": str(e),
         }
+
+
+def get_installed_version() -> str:
+    """Returns the installed commit SHA or version string from .version file."""
+    if os.path.exists(VERSION_FILE):
+        try:
+            with open(VERSION_FILE, "r", encoding="utf-8") as f:
+                ver = f.read().strip()
+                if ver:
+                    return ver
+        except Exception:
+            pass
+    return "unknown"
+
+
+def fetch_latest_remote_version(timeout: float = 3.0) -> Optional[str]:
+    """Queries GitHub API for the latest commit SHA on main."""
+    import urllib.request
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+    req = urllib.request.Request(url, headers={"User-Agent": "agy-auto-review"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode())
+            sha = data.get("sha")
+            if isinstance(sha, str) and sha:
+                return sha.strip()
+    except Exception:
+        return None
+    return None
+
+
+def check_for_update(force: bool = False) -> Tuple[bool, str, Optional[str]]:
+    """
+    Checks if a newer commit exists on GitHub.
+    Returns (update_available, current_version, latest_version).
+    Caches check in state for 24 hours unless force=True.
+    """
+    local_ver = get_installed_version()
+    state = load_state()
+    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    last_check = state.get("lastUpdateCheck", 0)
+    cached_remote = state.get("latestRemoteVersion")
+
+    if not force and cached_remote and (now - last_check < 86400):
+        remote_ver = cached_remote
+    else:
+        remote_ver = fetch_latest_remote_version()
+        if remote_ver:
+            state["lastUpdateCheck"] = now
+            state["latestRemoteVersion"] = remote_ver
+            save_state(state)
+        else:
+            remote_ver = cached_remote
+
+    if remote_ver and local_ver != "unknown" and local_ver != remote_ver:
+        return True, local_ver, remote_ver
+    return False, local_ver, remote_ver
+
+
+def perform_update() -> Tuple[bool, str]:
+    """
+    Downloads latest repository tarball from GitHub and executes install.sh.
+    """
+    import tempfile
+    archive_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.tar.gz"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        curl_cmd = ["curl", "-fsSL", archive_url]
+        tar_cmd = ["tar", "-xz", "-C", tmp_dir, "--strip-components=1"]
+        try:
+            p1 = subprocess.Popen(curl_cmd, stdout=subprocess.PIPE)
+            p2 = subprocess.Popen(tar_cmd, stdin=p1.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            p1.stdout.close()
+            _, stderr = p2.communicate()
+            if p2.returncode != 0:
+                err_msg = stderr.decode() if stderr else "unknown archive extraction failure"
+                return False, f"Failed to download and extract archive: {err_msg}"
+        except Exception as e:
+            return False, f"Error downloading archive: {e}"
+
+        install_script = os.path.join(tmp_dir, "install.sh")
+        if not os.path.exists(install_script):
+            return False, "install.sh not found in downloaded archive"
+
+        try:
+            res = subprocess.run(["bash", install_script], capture_output=True, text=True, check=False)
+            if res.returncode != 0:
+                return False, f"install.sh failed:\n{res.stderr or res.stdout}"
+        except Exception as e:
+            return False, f"Error running install.sh: {e}"
+
+    new_ver = get_installed_version()
+    display_ver = new_ver[:7] if len(new_ver) >= 7 else new_ver
+    return True, f"Successfully updated agy-auto-review to {display_ver}!"
+
