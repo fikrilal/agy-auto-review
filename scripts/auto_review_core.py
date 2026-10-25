@@ -680,9 +680,14 @@ def check_for_update(force: bool = False) -> Tuple[bool, str, Optional[str]]:
 def perform_update() -> Tuple[bool, str]:
     """
     Downloads latest repository tarball from GitHub and executes install.sh.
+    Uses commit SHA for immutable, cache-free download if available.
     """
     import tempfile
-    archive_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.tar.gz"
+    remote_sha = fetch_latest_remote_version()
+    if remote_sha:
+        archive_url = f"https://github.com/{GITHUB_REPO}/archive/{remote_sha}.tar.gz"
+    else:
+        archive_url = f"https://github.com/{GITHUB_REPO}/archive/refs/heads/main.tar.gz"
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         curl_cmd = ["curl", "-fsSL", archive_url]
@@ -708,6 +713,13 @@ def perform_update() -> Tuple[bool, str]:
                 return False, f"install.sh failed:\n{res.stderr or res.stdout}"
         except Exception as e:
             return False, f"Error running install.sh: {e}"
+
+    if remote_sha:
+        try:
+            with open(VERSION_FILE, "w", encoding="utf-8") as f:
+                f.write(remote_sha + "\n")
+        except Exception:
+            pass
 
     new_ver = get_installed_version()
     display_ver = new_ver[:7] if len(new_ver) >= 7 else new_ver
