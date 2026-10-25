@@ -10,15 +10,24 @@ echo "==> Installing agy-auto-review..."
 
 # 1. Create target directories
 mkdir -p "${PLUGINS_DIR}/scripts"
-mkdir -p "${PLUGINS_DIR}/skills/auto-review"
-mkdir -p "${CONFIG_DIR}/skills/auto-review"
+mkdir -p "${PLUGINS_DIR}/skills"
+mkdir -p "${CONFIG_DIR}/skills"
 mkdir -p "${BIN_DIR}"
 
 # 2. Copy files
 cp "${SCRIPT_DIR}/plugin.json" "${PLUGINS_DIR}/plugin.json"
 cp "${SCRIPT_DIR}/scripts/"*.py "${PLUGINS_DIR}/scripts/"
-cp "${SCRIPT_DIR}/skills/auto-review/"* "${PLUGINS_DIR}/skills/auto-review/"
-cp "${SCRIPT_DIR}/skills/auto-review/"* "${CONFIG_DIR}/skills/auto-review/"
+
+# Copy all skills into both plugin skills and root global skills
+for sdir in "${SCRIPT_DIR}/skills/"*; do
+    if [ -d "${sdir}" ]; then
+        sname="$(basename "${sdir}")"
+        mkdir -p "${PLUGINS_DIR}/skills/${sname}"
+        mkdir -p "${CONFIG_DIR}/skills/${sname}"
+        cp -r "${sdir}/"* "${PLUGINS_DIR}/skills/${sname}/"
+        cp -r "${sdir}/"* "${CONFIG_DIR}/skills/${sname}/"
+    fi
+done
 
 # Make scripts executable
 chmod +x "${PLUGINS_DIR}/scripts/"*.py

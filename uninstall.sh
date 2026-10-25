@@ -50,10 +50,13 @@ if [ -d "${PLUGINS_DIR}" ]; then
     echo "Removed ${PLUGINS_DIR}"
 fi
 
-if [ -d "${SKILLS_DIR}" ]; then
-    rm -rf "${SKILLS_DIR}"
-    echo "Removed ${SKILLS_DIR}"
-fi
+SKILL_NAMES=("auto-review" "agy-review" "review-loop" "review-status" "review-reset" "review-now" "review-off" "review-once")
+for s in "${SKILL_NAMES[@]}"; do
+    if [ -d "${CONFIG_DIR}/skills/${s}" ]; then
+        rm -rf "${CONFIG_DIR}/skills/${s}"
+        echo "Removed ${CONFIG_DIR}/skills/${s}"
+    fi
+done
 
 # 4. Optional purge of state file
 if [ "${PURGE}" = "--purge" ] && [ -f "${STATE_FILE}" ]; then
