@@ -57,7 +57,11 @@ import urllib.request, json
 try:
     req = urllib.request.Request(
         "https://api.github.com/repos/${REPO_SLUG}/commits/main",
-        headers={"User-Agent": "agy-auto-review-installer"}
+        headers={
+            "User-Agent": "agy-auto-review-installer",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        }
     )
     with urllib.request.urlopen(req, timeout=5) as resp:
         data = json.loads(resp.read().decode())

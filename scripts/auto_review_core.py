@@ -637,7 +637,14 @@ def fetch_latest_remote_version(timeout: float = 3.0) -> Optional[str]:
     """Queries GitHub API for the latest commit SHA on main."""
     import urllib.request
     url = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
-    req = urllib.request.Request(url, headers={"User-Agent": "agy-auto-review"})
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "agy-auto-review",
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache",
+        },
+    )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode())
