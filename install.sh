@@ -93,22 +93,48 @@ if os.path.exists(hooks_path):
         pass
 
 # Check if hook already registered
-exists = any(
-    h.get("event") == "Stop" and h.get("command") == hook_command
-    for h in data.get("hooks", [])
-)
+hooks_entry = data.get("hooks")
+exists = False
+
+if isinstance(hooks_entry, dict):
+    # Plugin-nested format: {"hooks": {"auto-review": {"Stop": [...]}}}
+    for plugin_name, events in hooks_entry.items():
+        if isinstance(events, dict):
+            for event_name, handlers in events.items():
+                if event_name == "Stop" and isinstance(handlers, list):
+                    for handler in handlers:
+                        if isinstance(handler, dict) and hook_command in handler.get("command", ""):
+                            exists = True
+elif isinstance(hooks_entry, list):
+    # Flat list format: {"hooks": [{"event": "Stop", "command": ...}]}
+    for h in hooks_entry:
+        if isinstance(h, dict) and h.get("event") == "Stop" and hook_command in str(h.get("command", "")):
+            exists = True
+else:
+    data["hooks"] = []
+    hooks_entry = data["hooks"]
 
 if not exists:
-    data["hooks"].append({
-        "event": "Stop",
-        "command": hook_command
-    })
+    if isinstance(data.get("hooks"), dict):
+        data["hooks"].setdefault("auto-review", {})["Stop"] = [{
+            "type": "command",
+            "command": f"python3 {hook_command}",
+            "timeout": 1200
+        }]
+    else:
+        data["hooks"].append({
+            "event": "Stop",
+            "command": hook_command
+        })
     with open(hooks_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     print("Registered Stop hook in ~/.gemini/config/hooks.json")
 else:
     print("Stop hook already registered in ~/.gemini/config/hooks.json")
 EOF
+
+# 6. Clean up any historical reviewer sessions from conversation picker index
+"${BIN_DIR}/agy-review" clean >/dev/null 2>&1 || true
 
 echo "✓ agy-auto-review installed successfully!"
 echo "Run 'agy-review status' to check configuration."

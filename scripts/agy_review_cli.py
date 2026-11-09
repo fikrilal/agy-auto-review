@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auto_review_core import (
     capture_workspace,
     check_for_update,
+    clean_reviewer_summaries,
     find_review_skills,
     get_active_account_info,
     get_installed_version,
@@ -213,7 +214,13 @@ def main() -> None:
         state["model"] = DEFAULT_MODEL
         state["effort"] = DEFAULT_EFFORT
         save_state(state)
-        print("✓ Antigravity reviewer session reset. Next review will start fresh.")
+        cleaned = clean_reviewer_summaries()
+        extra = f" and cleaned {cleaned} picker summaries" if cleaned else ""
+        print(f"✓ Antigravity reviewer session reset{extra}. Next review will start fresh.")
+
+    elif cmd in ("clean", "prune", "purge"):
+        removed = clean_reviewer_summaries()
+        print(f"✓ Cleaned up {removed} automated reviewer sessions from conversation picker history.")
 
     elif cmd == "rotate":
         rotated, msg = rotate_cli_account()
@@ -267,6 +274,7 @@ def main() -> None:
         print("  status            Show current review mode, cycle count, and repo status")
         print("  now               Run Antigravity reviewer immediately on current workspace")
         print("  reset             Reset review conversation history and cycle count")
+        print("  clean             Purge automated review sessions from agy resume picker history")
         print("  rotate            Rotate to next available Antigravity account with quota")
         print("  update [--force]  Update agy-auto-review to latest version from GitHub")
         print("  help              Show this help message")

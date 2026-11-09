@@ -11,6 +11,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,6 +37,98 @@ FINGERPRINT_SCRIPTS = [
     ".agents/mods/review-fingerprint.sh",
     ".agents/scripts/review-fingerprint.sh",
 ]
+
+SUMMARY_DB_PATHS = [
+    os.path.expanduser("~/.gemini/antigravity-cli/conversation_summaries.db"),
+    os.path.expanduser("~/.gemini/antigravity/conversation_summaries.db"),
+]
+
+
+def deindex_conversation(convo_id: Optional[str]) -> None:
+    """
+    Removes a conversation from the conversation_summaries picker index across CLI and Desktop.
+    The raw conversation file in conversations/<id>.db remains intact so it can still be resumed
+    or inspected via agy --conversation <id>.
+    """
+    if not convo_id:
+        return
+    for db_path in SUMMARY_DB_PATHS:
+        if not os.path.exists(db_path):
+            continue
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            c = conn.cursor()
+            c.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?", (convo_id,))
+            try:
+                c.execute("DELETE FROM conversations_fts WHERE conversation_id = ?", (convo_id,))
+            except Exception:
+                pass
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+
+def clean_reviewer_summaries() -> int:
+    """
+    Retroactively purges all automated reviewer conversations from conversation_summaries.db
+    and removes their conversation database files so background reconciliation cannot resurrect them.
+    Returns the total number of cleaned up conversation summaries.
+    """
+    total_removed = 0
+    all_cids = set()
+    for db_path in SUMMARY_DB_PATHS:
+        if not os.path.exists(db_path):
+            continue
+        try:
+            conn = sqlite3.connect(db_path, timeout=5)
+            c = conn.cursor()
+            c.execute("""
+                SELECT conversation_id 
+                FROM conversation_summaries 
+                WHERE preview LIKE 'You are the automated reviewer%' 
+                   OR title LIKE '%automated reviewer%'
+            """)
+            ids = [row[0] for row in c.fetchall() if row[0]]
+            for cid in ids:
+                all_cids.add(cid)
+            if ids:
+                c.execute("""
+                    DELETE FROM conversation_summaries 
+                    WHERE preview LIKE 'You are the automated reviewer%' 
+                       OR title LIKE '%automated reviewer%'
+                """)
+                try:
+                    for cid in ids:
+                        c.execute("DELETE FROM conversations_fts WHERE conversation_id = ?", (cid,))
+                except Exception:
+                    pass
+                conn.commit()
+                total_removed += len(ids)
+            conn.close()
+        except Exception:
+            pass
+
+    # Clean up corresponding conversation database files and brain logs
+    for cid in all_cids:
+        for root_dir in [
+            os.path.expanduser("~/.gemini/antigravity-cli"),
+            os.path.expanduser("~/.gemini/antigravity"),
+        ]:
+            conv_db = os.path.join(root_dir, "conversations", f"{cid}.db")
+            if os.path.exists(conv_db):
+                try:
+                    os.remove(conv_db)
+                except Exception:
+                    pass
+            brain_dir = os.path.join(root_dir, "brain", cid)
+            if os.path.exists(brain_dir):
+                try:
+                    shutil.rmtree(brain_dir, ignore_errors=True)
+                except Exception:
+                    pass
+
+    return total_removed
 
 
 def load_state() -> Dict[str, Any]:
@@ -584,6 +677,9 @@ def run_reviewer_turn(
                         _already_rotated=True,
                     )
 
+            err_convo = (envelope.get("conversation_id") if envelope else None) or existing_convo_id
+            if err_convo:
+                deindex_conversation(err_convo)
             err_detail = clip_text((envelope.get("error") if envelope else proc.stderr) or clean_text, 500)
             return {
                 "ok": False,
@@ -594,6 +690,8 @@ def run_reviewer_turn(
             }
 
         convo_id = (envelope.get("conversation_id") if envelope else None) or existing_convo_id
+        if convo_id:
+            deindex_conversation(convo_id)
         return {
             "ok": True,
             "verdict": verdict,

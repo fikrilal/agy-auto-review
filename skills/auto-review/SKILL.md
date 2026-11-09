@@ -23,6 +23,8 @@ Use the `run_command` tool to manage auto-review:
   `agy-review status`
 - **Reset Session / Counts**:
   `agy-review reset`
+- **Clean / Purge Picker History**:
+  `agy-review clean`
 - **Rotate Account Quota**:
   `agy-review rotate`
 - **Run Review Immediately**:

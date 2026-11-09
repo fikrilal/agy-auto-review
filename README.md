@@ -56,6 +56,7 @@ Use either terminal commands or chat slash commands:
 | `agy-review off` | `/review-off` | Disable automatic reviews |
 | `agy-review now` | `/review-now` | Run Antigravity reviewer immediately on current workspace |
 | `agy-review reset` | `/review-reset` | Reset reviewer session and cycle count |
+| `agy-review clean` | — | Purge automated review sessions from `agy resume` picker history |
 | `agy-review rotate` | — | Manually rotate to next Antigravity account with quota |
 | `agy-review update` | — | Pull latest updates from GitHub |
 
