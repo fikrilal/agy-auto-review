@@ -91,41 +91,50 @@ def main() -> None:
 
     proj_state = get_project_state(state, repo_root)
 
-    # If the previous model turn just announced the approval, stop immediately!
+    # 1. If the previous model turn just announced the approval, stop immediately!
     if proj_state.get("announcedApproval") or state.get("announcedApproval"):
         proj_state["announcedApproval"] = False
         state["announcedApproval"] = False
         save_state(state)
         allow_stop()
 
-    # 4b. Guard: if the turn was purely conversational / read-only (zero file modifications), do not review
-    transcript_path = payload.get("transcriptPath")
-    if not turn_has_code_modifications(transcript_path):
-        allow_stop()
-
-    # 5. Capture workspace snapshot and dirty check
+    # 2. Capture workspace snapshot and dirty check
     try:
         snapshot = capture_workspace(repo_root)
     except Exception:
         allow_stop()
 
     if not snapshot["dirty"]:
+        proj_state["lastObservedFingerprint"] = "clean"
+        save_state(state)
         allow_stop()
 
     current_fp = snapshot["fingerprint"]
 
-    # Check if this exact working tree was already approved
+    # 3. Check if this exact working tree was already approved
     if proj_state.get("approvedFingerprint") == current_fp or state.get("approvedFingerprint") == current_fp:
+        proj_state["lastObservedFingerprint"] = current_fp
+        save_state(state)
         allow_stop()
 
-    # Check if last verdict was APPROVED and the code has not changed since
-    last_verdict = proj_state.get("lastVerdict") or state.get("lastVerdict")
+    # 4. Check if code has not changed since the last review
+    # (whether APPROVED or CHANGES_REQUIRED, if signature is identical, do not re-review)
     last_fp = proj_state.get("lastReviewedFingerprint") or state.get("lastReviewedFingerprint")
-    if last_verdict == "APPROVED" and last_fp == current_fp:
+    if last_fp and current_fp == last_fp:
+        proj_state["lastObservedFingerprint"] = current_fp
+        save_state(state)
         allow_stop()
 
-    if current_fp == last_fp:
-        # Code did not change since last review feedback; avoid infinite loop
+    # 5. Check if working tree signature is unchanged since previous turn (pure chat invariance)
+    last_observed_fp = proj_state.get("lastObservedFingerprint")
+    if last_observed_fp and current_fp == last_observed_fp:
+        allow_stop()
+
+    # 6. Guard: if the turn was purely conversational / read-only (zero file modifications), do not review
+    transcript_path = payload.get("transcriptPath")
+    if not turn_has_code_modifications(transcript_path):
+        proj_state["lastObservedFingerprint"] = current_fp
+        save_state(state)
         allow_stop()
 
     review_count = proj_state.get("reviewCount", 0)
@@ -167,6 +176,7 @@ def main() -> None:
         review_count += 1
         proj_state["reviewCount"] = review_count
         proj_state["lastReviewedFingerprint"] = current_fp
+        proj_state["lastObservedFingerprint"] = current_fp
         state["reviewCount"] = review_count
         state["lastReviewedFingerprint"] = current_fp
         if result.get("conversationId"):
@@ -191,6 +201,7 @@ def main() -> None:
 
         if verdict == "APPROVED":
             proj_state["approvedFingerprint"] = current_fp
+            proj_state["lastObservedFingerprint"] = current_fp
             proj_state["announcedApproval"] = True
             state["approvedFingerprint"] = current_fp
             state["announcedApproval"] = True  # Instructs next Stop hook to immediately terminate

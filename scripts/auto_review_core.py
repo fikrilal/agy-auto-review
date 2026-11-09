@@ -16,7 +16,7 @@ import subprocess
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
-STATE_FILE = os.path.expanduser("~/.gemini/config/auto-review.json")
+STATE_FILE = os.environ.get("AGY_REVIEW_STATE_FILE") or os.path.expanduser("~/.gemini/config/auto-review.json")
 PLUGINS_DIR = os.path.expanduser("~/.gemini/config/plugins/auto-review")
 VERSION_FILE = os.path.join(PLUGINS_DIR, ".version")
 GITHUB_REPO = "fikrilal/agy-auto-review"
@@ -212,14 +212,194 @@ READONLY_TOOLS = {
     "manage_task",
     "schedule",
     "send_message",
+    "search_marketplace",
+    "list_plugin_accounts",
 }
+
+READONLY_GIT_SUBCOMMANDS = {
+    "status",
+    "log",
+    "diff",
+    "rev-parse",
+    "show",
+    "branch",
+    "ls-files",
+    "remote",
+    "tag",
+    "describe",
+    "config",
+    "check-ignore",
+    "cat-file",
+    "hash-object",
+    "version",
+    "shortlog",
+    "blame",
+    "var",
+}
+
+READONLY_ROOT_COMMANDS = {
+    # Filesystem & navigation
+    "ls",
+    "pwd",
+    "dir",
+    "vdir",
+    "cat",
+    "head",
+    "tail",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rgrep",
+    "rg",
+    "ag",
+    "ack",
+    "bat",
+    "less",
+    "more",
+    "which",
+    "whereis",
+    "type",
+    "file",
+    "stat",
+    "du",
+    "df",
+    "wc",
+    "diff",
+    "cmp",
+    "comm",
+    "md5sum",
+    "sha1sum",
+    "sha256sum",
+    "shasum",
+    "cksum",
+    "b2sum",
+    "base64",
+    "fold",
+    "paste",
+    "nl",
+    "strings",
+    # Text / stream inspection (without writing)
+    "echo",
+    "printf",
+    "sort",
+    "uniq",
+    "cut",
+    "tr",
+    "column",
+    "awk",
+    "jq",
+    # System & environment
+    "true",
+    "false",
+    "test",
+    "[",
+    "uname",
+    "whoami",
+    "id",
+    "date",
+    "uptime",
+    "hostname",
+    "printenv",
+    "ps",
+    "top",
+    "arch",
+    "cal",
+    "groups",
+    "locale",
+}
+
+FIND_MODIFYING_FLAGS = {"-delete", "-exec", "-execdir", "-ok", "-okdir"}
+
+
+def is_single_command_readonly(cmd: str) -> bool:
+    cmd = cmd.strip()
+    if not cmd:
+        return True
+
+    words = cmd.split()
+    while words and "=" in words[0] and not words[0].startswith("-"):
+        words.pop(0)
+    if not words:
+        return True
+
+    first = os.path.basename(words[0])
+
+    if len(words) >= 2 and words[1] in ("-v", "--version", "-V", "version"):
+        return True
+
+    if first == "find":
+        for w in words[1:]:
+            if w in FIND_MODIFYING_FLAGS:
+                return False
+        return True
+
+    if first == "env":
+        idx = 1
+        while idx < len(words):
+            w = words[idx]
+            if w in ("-u", "-C", "--unset", "--chdir") and idx + 1 < len(words):
+                idx += 2
+            elif w.startswith("-"):
+                idx += 1
+            elif "=" in w:
+                idx += 1
+            else:
+                break
+        if idx >= len(words):
+            return True
+        return is_single_command_readonly(" ".join(words[idx:]))
+
+    if first == "git":
+        idx = 1
+        while idx < len(words):
+            w = words[idx]
+            if w in ("-C", "--git-dir", "--work-tree") and idx + 1 < len(words):
+                idx += 2
+            elif w.startswith("-"):
+                idx += 1
+            else:
+                return w in READONLY_GIT_SUBCOMMANDS
+        return False
+
+    return first in READONLY_ROOT_COMMANDS
+
+
+def is_readonly_shell_command(cmd_str: str) -> bool:
+    """
+    Checks if a shell command string consists solely of read-only operations.
+    Returns False if any modifying commands, file redirections, or unrecognized commands exist.
+    """
+    if not cmd_str or not cmd_str.strip():
+        return True
+
+    # Remove safe /dev/null redirects and 2>&1
+    cleaned = re.sub(r"2\s*>\s*/dev/null", "", cmd_str)
+    cleaned = re.sub(r"1\s*>\s*/dev/null", "", cleaned)
+    cleaned = re.sub(r"&\s*>\s*/dev/null", "", cleaned)
+    cleaned = re.sub(r">\s*/dev/null", "", cleaned)
+    cleaned = re.sub(r"2\s*>&1", "", cleaned)
+
+    # Check for remaining file redirects or tee
+    if ">" in cleaned or "| tee" in cleaned:
+        return False
+
+    # Split by chain/pipeline operators (&&, ||, ;, |)
+    parts = re.split(r"(&&|\|\||;|\|)", cleaned)
+    for part in parts:
+        if part in ("&&", "||", ";", "|"):
+            continue
+        part = part.strip()
+        if part and not is_single_command_readonly(part):
+            return False
+
+    return True
 
 
 def turn_has_code_modifications(transcript_path: Optional[str]) -> bool:
     """
     Inspects the transcript for the turn that just finished.
     Returns False if the turn was purely conversational or only used read-only tools.
-    Returns True if any code-modifying tools (edit_file, write_file, run_command, etc.) were used.
+    Returns True if any code-modifying tools (edit_file, write_file, non-read-only shell commands, etc.) were used.
     """
     if not transcript_path or not os.path.isfile(transcript_path):
         return True
@@ -246,9 +426,15 @@ def turn_has_code_modifications(transcript_path: Optional[str]) -> bool:
             for tc in tool_calls:
                 has_any_tools = True
                 name = tc.get("name", "")
-                if name not in READONLY_TOOLS:
-                    has_modifying_tools = True
-                    break
+                if name in READONLY_TOOLS:
+                    continue
+                if name == "run_command":
+                    args = tc.get("args") or {}
+                    cmd_line = args.get("CommandLine", "")
+                    if is_readonly_shell_command(cmd_line):
+                        continue
+                has_modifying_tools = True
+                break
 
             if has_modifying_tools:
                 break
@@ -341,7 +527,18 @@ def capture_workspace(repo_root: str) -> Dict[str, Any]:
     head = head_res.stdout.strip()
 
     diff_res = subprocess.run(
-        ["git", "diff", "--binary", "--no-ext-diff", "HEAD", "--"],
+        [
+            "git",
+            "diff",
+            "--binary",
+            "--no-ext-diff",
+            "HEAD",
+            "--",
+            ".",
+            ":(exclude)review-latest.md",
+            ":(exclude).agents/review-latest.md",
+            ":(exclude)review.md",
+        ],
         cwd=repo_root,
         capture_output=True,
         check=False,
@@ -356,9 +553,22 @@ def capture_workspace(repo_root: str) -> Dict[str, Any]:
 
     untracked_files = [
         f for f in untracked_res.stdout.split(b"\0")
-        if f and not f.endswith(b"review-latest.md") and not f.endswith(b"review.md")
+        if f
+        and not f.endswith(b"review-latest.md")
+        and not f.endswith(b"review.md")
     ]
     untracked_files.sort()
+
+    is_dirty = len(diff_res.stdout) > 0 or len(untracked_files) > 0
+
+    if not is_dirty:
+        return {
+            "root": repo_root,
+            "head": head,
+            "fingerprint": "clean",
+            "dirty": False,
+            "fingerprint_script": None,
+        }
 
     untracked_hashes: List[bytes] = []
     for ufile in untracked_files:
@@ -379,13 +589,11 @@ def capture_workspace(repo_root: str) -> Dict[str, Any]:
     hasher.update(b"\0".join(untracked_hashes))
     fingerprint = hasher.hexdigest()
 
-    is_dirty = len(diff_res.stdout) > 0 or len(untracked_files) > 0
-
     return {
         "root": repo_root,
         "head": head,
         "fingerprint": fingerprint,
-        "dirty": is_dirty,
+        "dirty": True,
         "fingerprint_script": None,
     }
 
@@ -474,6 +682,20 @@ def ensure_git_exclude(repo_root: str, pattern: str = ".agents/review-latest.md"
             pass
 
 
+def remove_git_exclude(repo_root: str, pattern: str) -> None:
+    exclude_file = os.path.join(repo_root, ".git", "info", "exclude")
+    if os.path.isfile(exclude_file):
+        try:
+            with open(exclude_file, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+            new_lines = [l for l in lines if l.strip() != pattern]
+            if len(new_lines) != len(lines):
+                with open(exclude_file, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+        except Exception:
+            pass
+
+
 def save_review_report(
     repo_root: str,
     artifact_dir: Optional[str],
@@ -485,9 +707,12 @@ def save_review_report(
     tree_hash: str,
 ) -> str:
     """Saves the reviewer output to .agents/review-latest.md and artifactDirectoryPath/review.md."""
-    # Ensure git ignores this generated file so it does not alter git status or fingerprints
+    # Ensure git ignores only the specific generated review report paths
+    remove_git_exclude(repo_root, ".agents")
+    remove_git_exclude(repo_root, ".agents/*")
     ensure_git_exclude(repo_root, ".agents/review-latest.md")
     ensure_git_exclude(repo_root, "review-latest.md")
+    ensure_git_exclude(repo_root, "review.md")
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     report = (
         f"# Antigravity Review Report\n\n"
@@ -501,8 +726,7 @@ def save_review_report(
     )
 
     out_dir = os.path.join(repo_root, ".agents")
-    if not os.path.isdir(out_dir):
-        out_dir = repo_root
+    os.makedirs(out_dir, exist_ok=True)
     report_path = os.path.join(out_dir, "review-latest.md")
     try:
         with open(report_path, "w", encoding="utf-8") as f:

@@ -81,6 +81,39 @@ class TestFingerprint(unittest.TestCase):
         after_report_snapshot = capture_workspace(self.test_dir)
         self.assertEqual(dirty_snapshot["fingerprint"], after_report_snapshot["fingerprint"])
 
+    def test_tracked_review_report_excluded_from_fingerprint(self):
+        # Even if review-latest.md was previously committed and tracked in git,
+        # modifying it must NOT cause the tree to be dirty or change the fingerprint.
+        report_file = os.path.join(self.test_dir, "review-latest.md")
+        with open(report_file, "w", encoding="utf-8") as f:
+            f.write("# Old Review Report\n")
+        subprocess.run(["git", "add", "review-latest.md"], cwd=self.test_dir, check=True)
+        subprocess.run(["git", "commit", "-m", "Track review report"], cwd=self.test_dir, check=True)
+
+        clean_snapshot = capture_workspace(self.test_dir)
+        self.assertFalse(clean_snapshot["dirty"])
+
+        # Now mutate the tracked review report
+        with open(report_file, "w", encoding="utf-8") as f:
+            f.write("# Mutated Review Report by Reviewer\nRound 2: APPROVED\n")
+
+        # capture_workspace must ignore the tracked review-latest.md diff!
+        after_mutation = capture_workspace(self.test_dir)
+        self.assertFalse(after_mutation["dirty"])
+        self.assertEqual(after_mutation["fingerprint"], "clean")
+
+    def test_agents_skills_included_in_fingerprint(self):
+        # Adding or editing a skill inside .agents/skills/ MUST be detected as dirty!
+        skill_dir = os.path.join(self.test_dir, ".agents", "skills", "my-skill")
+        os.makedirs(skill_dir, exist_ok=True)
+        skill_file = os.path.join(skill_dir, "SKILL.md")
+        with open(skill_file, "w", encoding="utf-8") as f:
+            f.write("# My Skill\n")
+
+        snapshot = capture_workspace(self.test_dir)
+        self.assertTrue(snapshot["dirty"])
+        self.assertNotEqual(snapshot["fingerprint"], "clean")
+
     def test_custom_fingerprint_script(self):
         # Create a mock review-fingerprint.sh
         mods_dir = os.path.join(self.test_dir, ".commandcode", "mods")

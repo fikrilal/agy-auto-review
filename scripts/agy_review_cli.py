@@ -209,10 +209,21 @@ def main() -> None:
         state["conversationId"] = None
         state["lastReviewedFingerprint"] = None
         state["approvedFingerprint"] = None
+        state["lastObservedFingerprint"] = None
         state["lastVerdict"] = None
         state["reviewCount"] = 0
         state["model"] = DEFAULT_MODEL
         state["effort"] = DEFAULT_EFFORT
+        if "projects" in state and isinstance(state["projects"], dict):
+            for p_state in state["projects"].values():
+                if isinstance(p_state, dict):
+                    p_state["conversationId"] = None
+                    p_state["lastReviewedFingerprint"] = None
+                    p_state["approvedFingerprint"] = None
+                    p_state["lastObservedFingerprint"] = None
+                    p_state["lastVerdict"] = None
+                    p_state["reviewCount"] = 0
+                    p_state["announcedApproval"] = False
         save_state(state)
         cleaned = clean_reviewer_summaries()
         extra = f" and cleaned {cleaned} picker summaries" if cleaned else ""
