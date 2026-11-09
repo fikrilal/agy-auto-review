@@ -101,6 +101,7 @@ def clean_reviewer_summaries() -> int:
                 try:
                     for cid in ids:
                         c.execute("DELETE FROM conversations_fts WHERE conversation_id = ?", (cid,))
+                    c.execute("DELETE FROM conversations_fts WHERE user_body LIKE '%automated reviewer%' OR title LIKE '%automated reviewer%'")
                 except Exception:
                     pass
                 conn.commit()
